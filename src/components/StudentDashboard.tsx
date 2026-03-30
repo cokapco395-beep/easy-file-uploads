@@ -32,7 +32,7 @@ const StudentDashboard = ({ user, onLogout }: StudentDashboardProps) => {
       case "home": return <HomePage user={user} />;
       case "ai": return <AIPage user={user} />;
       case "chat": return <ChatPage user={user} />;
-      case "grades": return <GradesPage />;
+      case "grades": return <GradesPage user={user} />;
       case "profile": return <ProfilePage user={user} onLogout={onLogout} />;
     }
   };
