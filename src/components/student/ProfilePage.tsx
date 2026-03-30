@@ -1,6 +1,8 @@
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { useI18n } from "@/lib/i18n";
-import { Edit, Share2, Award, Users, Heart, Flame, LogOut, Camera } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { Edit, Share2, Award, Users, Heart, Flame, LogOut, Camera, Star } from "lucide-react";
 
 interface ProfilePageProps {
   user: any;
@@ -11,16 +13,34 @@ const ProfilePage = ({ user, onLogout }: ProfilePageProps) => {
   const { t, lang, setLang } = useI18n();
   const avatarUrl = `https://api.dicebear.com/7.x/adventurer/svg?seed=${user.username}`;
 
-  const stats = [
-    { icon: Users, value: 24, label: t("profile.followers") },
-    { icon: Award, value: 8, label: t("profile.achievements") },
-    { icon: Heart, value: 156, label: t("profile.likes") },
-  ];
+  const [achievements, setAchievements] = useState<any[]>([]);
+  const [profile, setProfile] = useState(user);
 
-  const certificates = [
-    { title: lang === "kz" ? "Математика олимпиадасы" : "Олимпиада по математике", year: "2024" },
-    { title: lang === "kz" ? "Үздік оқушы" : "Лучший ученик", year: "2024" },
-    { title: lang === "kz" ? "Спорт жарысы" : "Спортивные соревнования", year: "2023" },
+  useEffect(() => {
+    loadProfile();
+  }, []);
+
+  const loadProfile = async () => {
+    // Refresh profile data
+    const { data: profileData } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (profileData) setProfile(profileData);
+
+    // Load user achievements
+    const { data: userAch } = await supabase
+      .from("user_achievements")
+      .select("*, achievements(*)")
+      .eq("user_id", user.id);
+    if (userAch) setAchievements(userAch);
+  };
+
+  const stats = [
+    { icon: Star, value: profile.xp || 0, label: "XP" },
+    { icon: Award, value: achievements.length, label: t("profile.achievements") },
+    { icon: Flame, value: profile.level || 1, label: t("home.level") },
   ];
 
   return (
@@ -32,12 +52,11 @@ const ProfilePage = ({ user, onLogout }: ProfilePageProps) => {
             <Camera className="w-4 h-4 text-primary-foreground" />
           </div>
         </div>
-        <h2 className="text-xl font-black text-foreground mt-3">@{user.username}</h2>
-        <p className="text-sm font-semibold text-muted-foreground">{user.class} • ID: {user.id?.slice(0, 8)}</p>
-        <div className="flex items-center gap-1 mt-1">
-          <Flame className="w-4 h-4 text-secondary" />
-          <span className="text-sm font-bold text-secondary">7 {t("home.streak")}</span>
-        </div>
+        <h2 className="text-xl font-black text-foreground mt-3">@{profile.username}</h2>
+        <p className="text-sm font-semibold text-muted-foreground">{profile.full_name}</p>
+        <p className="text-xs text-muted-foreground mt-1">
+          {t("home.level")} {profile.level || 1} • {profile.xp || 0} XP • {profile.sphere_coins || 0} 🪙
+        </p>
       </div>
 
       <div className="flex gap-3 mb-6">
@@ -63,18 +82,29 @@ const ProfilePage = ({ user, onLogout }: ProfilePageProps) => {
         ))}
       </div>
 
-      <h3 className="text-lg font-black text-foreground mb-3">{t("profile.certificates")}</h3>
+      {/* Achievements */}
+      <h3 className="text-lg font-black text-foreground mb-3">{t("home.achievements")}</h3>
       <div className="flex gap-3 overflow-x-auto pb-2 mb-6">
-        {certificates.map((c, i) => (
-          <motion.div key={i} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.1 }}
-            className="min-w-[140px] bg-card rounded-xl p-3 shadow-card border-2 border-primary/20">
-            <Award className="w-8 h-8 text-primary mb-2" />
-            <p className="text-xs font-bold text-foreground">{c.title}</p>
-            <p className="text-[10px] text-muted-foreground mt-1">{c.year}</p>
+        {achievements.length > 0 ? achievements.map((a, i) => (
+          <motion.div key={a.id} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.1 }}
+            className="min-w-[80px] bg-card rounded-xl p-3 shadow-card text-center border-2 border-primary/20">
+            <span className="text-2xl">{a.achievements?.icon}</span>
+            <p className="text-[10px] font-bold text-foreground mt-1">{a.achievements?.title}</p>
           </motion.div>
-        ))}
+        )) : (
+          <p className="text-sm text-muted-foreground">{lang === "kz" ? "Жетістіктер әлі жоқ" : "Достижений пока нет"}</p>
+        )}
       </div>
 
+      {/* Bio */}
+      {profile.bio && (
+        <div className="bg-card rounded-xl p-4 shadow-card mb-4">
+          <p className="text-sm font-bold text-foreground mb-1">{t("profile.about")}</p>
+          <p className="text-sm text-muted-foreground">{profile.bio}</p>
+        </div>
+      )}
+
+      {/* Language */}
       <div className="bg-card rounded-xl p-4 shadow-card mb-4">
         <p className="text-sm font-bold text-foreground mb-2">{t("onboard.lang.title")}</p>
         <div className="flex gap-2">

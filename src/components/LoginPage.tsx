@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useI18n } from "@/lib/i18n";
-import { GraduationCap, Users, School, ShieldCheck, ArrowLeft, Eye, EyeOff } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { GraduationCap, Users, School, ShieldCheck, ArrowLeft, Eye, EyeOff, ChevronDown, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 type Role = "student" | "parent" | "teacher" | "admin";
 
@@ -18,33 +20,137 @@ const LoginPage = ({ onBack, onLoginSuccess }: LoginPageProps) => {
   const [form, setForm] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
 
+  // School/class selection
+  const [schools, setSchools] = useState<any[]>([]);
+  const [classes, setClasses] = useState<any[]>([]);
+  const [selectedSchoolId, setSelectedSchoolId] = useState<string>("");
+  const [selectedClassId, setSelectedClassId] = useState<string>("");
+
+  useEffect(() => {
+    loadSchools();
+  }, []);
+
+  useEffect(() => {
+    if (selectedSchoolId) {
+      loadClasses(selectedSchoolId);
+    } else {
+      setClasses([]);
+      setSelectedClassId("");
+    }
+  }, [selectedSchoolId]);
+
+  const loadSchools = async () => {
+    const { data } = await supabase.from("schools").select("id, name, city");
+    if (data) setSchools(data);
+  };
+
+  const loadClasses = async (schoolId: string) => {
+    const { data } = await supabase.from("classes").select("id, name").eq("school_id", schoolId);
+    if (data) setClasses(data);
+  };
+
+  const updateForm = (key: string, value: string) => setForm({ ...form, [key]: value });
+
+  const handleGoogleSignIn = async () => {
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    if (error) {
+      toast.error(error.message);
+      setLoading(false);
+    }
+  };
+
+  const handleLogin = async () => {
+    if (!form.email || !form.password) return;
+    setLoading(true);
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: form.email,
+      password: form.password,
+    });
+    if (error) {
+      toast.error(error.message);
+      setLoading(false);
+      return;
+    }
+    if (data.user) {
+      const { data: profile } = await supabase.from("profiles").select("*").eq("id", data.user.id).maybeSingle();
+      if (profile) {
+        onLoginSuccess(profile.role as Role, { ...profile, email: data.user.email });
+      }
+    }
+    setLoading(false);
+  };
+
+  const handleRegister = async () => {
+    if (!selectedRole || !form.email || !form.password) return;
+    if ((selectedRole === "student" || selectedRole === "teacher") && (!selectedSchoolId || !selectedClassId)) {
+      toast.error(t("auth.selectClass"));
+      return;
+    }
+
+    setLoading(true);
+    const metadata: Record<string, string> = {
+      role: selectedRole,
+      full_name: form.fullName || "",
+      username: form.username || form.email.split("@")[0],
+    };
+
+    const { data, error } = await supabase.auth.signUp({
+      email: form.email,
+      password: form.password,
+      options: {
+        data: metadata,
+        emailRedirectTo: window.location.origin,
+      },
+    });
+
+    if (error) {
+      toast.error(error.message);
+      setLoading(false);
+      return;
+    }
+
+    if (data.user) {
+      // Update profile with school and class
+      const profileUpdate: Record<string, any> = {
+        school_id: selectedSchoolId || null,
+        class_id: selectedClassId || null,
+        full_name: form.fullName || "",
+        username: form.username || form.email.split("@")[0],
+      };
+
+      await supabase.from("profiles").update(profileUpdate).eq("id", data.user.id);
+
+      // For parents, link child
+      if (selectedRole === "parent" && form.childId) {
+        await supabase.from("parent_children").insert({
+          parent_id: data.user.id,
+          child_id: form.childId,
+        });
+      }
+
+      const { data: profile } = await supabase.from("profiles").select("*").eq("id", data.user.id).maybeSingle();
+      if (profile) {
+        onLoginSuccess(selectedRole, { ...profile, email: data.user.email, isNewUser: true });
+      }
+    }
+    setLoading(false);
+  };
+
+  const handleSubmit = () => {
+    if (isRegister) handleRegister();
+    else handleLogin();
+  };
+
   const roles: { key: Role; icon: typeof GraduationCap; label: string; color: string }[] = [
     { key: "student", icon: GraduationCap, label: t("onboard.roles.student"), color: "gradient-primary" },
     { key: "parent", icon: Users, label: t("onboard.roles.parent"), color: "gradient-secondary" },
     { key: "teacher", icon: School, label: t("onboard.roles.teacher"), color: "gradient-accent" },
     { key: "admin", icon: ShieldCheck, label: t("onboard.roles.admin"), color: "gradient-primary" },
   ];
-
-  const updateForm = (key: string, value: string) => setForm({ ...form, [key]: value });
-
-  const handleSubmit = async () => {
-    if (!selectedRole) return;
-    setLoading(true);
-    setTimeout(() => {
-      const mockUser = {
-        id: "mock-user-1",
-        username: form.username || form.email?.split("@")[0] || "user",
-        email: form.email || "",
-        role: selectedRole,
-        schoolId: form.schoolId || "SCH001",
-        class: form.class || "7А",
-        fullName: form.fullName || "Пользователь",
-      };
-      localStorage.setItem("edusphere-user", JSON.stringify(mockUser));
-      setLoading(false);
-      onLoginSuccess(selectedRole, mockUser);
-    }, 1000);
-  };
 
   const InputField = ({ label, type = "text", field }: { label: string; type?: string; field: string }) => (
     <div className="mb-3">
@@ -66,6 +172,25 @@ const LoginPage = ({ onBack, onLoginSuccess }: LoginPageProps) => {
     </div>
   );
 
+  const SelectField = ({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: { id: string; label: string }[] }) => (
+    <div className="mb-3">
+      <label className="text-sm font-semibold text-muted-foreground mb-1 block">{label}</label>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full bg-muted border-2 border-border rounded-xl px-4 py-3 text-foreground font-semibold outline-none focus:border-primary transition-colors appearance-none"
+        >
+          <option value="">{label}</option>
+          {options.map((o) => (
+            <option key={o.id} value={o.id}>{o.label}</option>
+          ))}
+        </select>
+        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground pointer-events-none" />
+      </div>
+    </div>
+  );
+
   const renderForm = () => {
     if (!selectedRole) return null;
 
@@ -75,11 +200,12 @@ const LoginPage = ({ onBack, onLoginSuccess }: LoginPageProps) => {
           <InputField label={t("auth.email")} type="email" field="email" />
           <InputField label={t("auth.password")} type="password" field="password" />
           <motion.button whileTap={{ scale: 0.95 }} onClick={handleSubmit} disabled={loading}
-            className="w-full gradient-primary text-primary-foreground font-bold py-3.5 rounded-2xl shadow-button text-lg mt-4 disabled:opacity-50">
-            {loading ? "..." : t("auth.login")}
+            className="w-full gradient-primary text-primary-foreground font-bold py-3.5 rounded-2xl shadow-button text-lg mt-4 disabled:opacity-50 flex items-center justify-center gap-2">
+            {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : t("auth.login")}
           </motion.button>
-          {selectedRole === "student" && (
-            <motion.button whileTap={{ scale: 0.95 }} className="w-full bg-card border-2 border-border text-foreground font-bold py-3 rounded-2xl mt-3 flex items-center justify-center gap-2">
+          {selectedRole !== "admin" && (
+            <motion.button whileTap={{ scale: 0.95 }} onClick={handleGoogleSignIn} disabled={loading}
+              className="w-full bg-card border-2 border-border text-foreground font-bold py-3 rounded-2xl mt-3 flex items-center justify-center gap-2">
               <svg className="w-5 h-5" viewBox="0 0 24 24">
                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
                 <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
@@ -101,11 +227,25 @@ const LoginPage = ({ onBack, onLoginSuccess }: LoginPageProps) => {
 
     return (
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+        <SelectField
+          label={t("auth.selectSchool")}
+          value={selectedSchoolId}
+          onChange={setSelectedSchoolId}
+          options={schools.map((s) => ({ id: s.id, label: `${s.name} (${s.city})` }))}
+        />
+        {classes.length > 0 && (
+          <SelectField
+            label={t("auth.selectClass")}
+            value={selectedClassId}
+            onChange={setSelectedClassId}
+            options={classes.map((c) => ({ id: c.id, label: c.name }))}
+          />
+        )}
+
         {selectedRole === "student" && (
           <>
-            <InputField label={t("auth.schoolId")} field="schoolId" />
-            <InputField label={t("auth.class")} field="class" />
             <InputField label={t("auth.username")} field="username" />
+            <InputField label={t("auth.fullName")} field="fullName" />
             <InputField label={t("auth.email")} type="email" field="email" />
             <InputField label={t("auth.password")} type="password" field="password" />
           </>
@@ -120,16 +260,15 @@ const LoginPage = ({ onBack, onLoginSuccess }: LoginPageProps) => {
         )}
         {selectedRole === "teacher" && (
           <>
-            <InputField label={t("auth.schoolId")} field="schoolId" />
-            <InputField label={t("auth.class")} field="class" />
             <InputField label={t("auth.fullName")} field="fullName" />
             <InputField label={t("auth.email")} type="email" field="email" />
             <InputField label={t("auth.password")} type="password" field="password" />
           </>
         )}
+
         <motion.button whileTap={{ scale: 0.95 }} onClick={handleSubmit} disabled={loading}
-          className="w-full gradient-primary text-primary-foreground font-bold py-3.5 rounded-2xl shadow-button text-lg mt-4 disabled:opacity-50">
-          {loading ? "..." : t("auth.register")}
+          className="w-full gradient-primary text-primary-foreground font-bold py-3.5 rounded-2xl shadow-button text-lg mt-4 disabled:opacity-50 flex items-center justify-center gap-2">
+          {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : t("auth.register")}
         </motion.button>
         <p className="text-center text-sm text-muted-foreground mt-4">
           {t("auth.hasAccount")}{" "}
@@ -142,7 +281,7 @@ const LoginPage = ({ onBack, onLoginSuccess }: LoginPageProps) => {
   return (
     <div className="min-h-screen bg-background">
       <div className="flex items-center px-4 pt-12 pb-4">
-        <motion.button whileTap={{ scale: 0.9 }} onClick={selectedRole ? () => setSelectedRole(null) : onBack}>
+        <motion.button whileTap={{ scale: 0.9 }} onClick={selectedRole ? () => { setSelectedRole(null); setIsRegister(false); setForm({}); } : onBack}>
           <ArrowLeft className="w-6 h-6 text-foreground" />
         </motion.button>
         <h1 className="flex-1 text-center text-xl font-black text-foreground pr-6">
