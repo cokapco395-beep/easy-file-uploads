@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { AnimatePresence } from "framer-motion";
 import { I18nProvider } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
@@ -8,21 +8,39 @@ import LoginPage from "@/components/LoginPage";
 import ApplyPage from "@/components/ApplyPage";
 import PostRegOnboarding from "@/components/PostRegOnboarding";
 import StudentDashboard from "@/components/StudentDashboard";
+import ParentDashboard from "@/components/ParentDashboard";
+import TeacherDashboard from "@/components/TeacherDashboard";
+import AdminDashboard from "@/components/AdminDashboard";
 
 type Screen = "splash" | "onboarding" | "login" | "apply" | "postOnboarding" | "dashboard";
 
 const Index = () => {
-  const [screen, setScreen] = useState<Screen>("splash");
-  const [user, setUser] = useState<any>(null);
+  const [screen, setScreen] = useState<Screen>(() => {
+    const saved = sessionStorage.getItem("edusphere-screen");
+    return (saved as Screen) || "splash";
+  });
+  const [user, setUser] = useState<any>(() => {
+    const saved = sessionStorage.getItem("edusphere-user");
+    return saved ? JSON.parse(saved) : null;
+  });
   const [loading, setLoading] = useState(true);
 
+  // Persist session state
   useEffect(() => {
-    // Listen for auth changes FIRST
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    if (user) sessionStorage.setItem("edusphere-user", JSON.stringify(user));
+    else sessionStorage.removeItem("edusphere-user");
+  }, [user]);
+
+  useEffect(() => {
+    sessionStorage.setItem("edusphere-screen", screen);
+  }, [screen]);
+
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         const { data: profile } = await supabase
           .from("profiles")
-          .select("*")
+          .select("*, classes(name), schools(name)")
           .eq("id", session.user.id)
           .maybeSingle();
 
@@ -30,7 +48,9 @@ const Index = () => {
           const userData = { ...profile, email: session.user.email };
           setUser(userData);
 
-          // Check if onboarding is completed
+          // Update streak
+          await supabase.from("profiles").update({ last_active_date: new Date().toISOString().split("T")[0] }).eq("id", session.user.id);
+
           const { data: onboarding } = await supabase
             .from("onboarding")
             .select("completed")
@@ -45,24 +65,24 @@ const Index = () => {
         }
       } else {
         setUser(null);
-        setScreen("splash");
+        if (screen === "dashboard") setScreen("splash");
       }
       setLoading(false);
     });
 
-    // Then check current session
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (session?.user) {
         const { data: profile } = await supabase
           .from("profiles")
-          .select("*")
+          .select("*, classes(name), schools(name)")
           .eq("id", session.user.id)
           .maybeSingle();
 
         if (profile) {
           const userData = { ...profile, email: session.user.email };
           setUser(userData);
-
+          await supabase.from("profiles").update({ last_active_date: new Date().toISOString().split("T")[0] }).eq("id", session.user.id);
+          
           const { data: onboarding } = await supabase
             .from("onboarding")
             .select("completed")
@@ -106,8 +126,20 @@ const Index = () => {
   const handleLogout = useCallback(async () => {
     await supabase.auth.signOut();
     setUser(null);
+    sessionStorage.clear();
     setScreen("onboarding");
   }, []);
+
+  const renderDashboard = () => {
+    if (!user) return null;
+    const role = user.role || "student";
+    switch (role) {
+      case "parent": return <ParentDashboard user={user} onLogout={handleLogout} />;
+      case "teacher": return <TeacherDashboard user={user} onLogout={handleLogout} />;
+      case "admin": return <AdminDashboard user={user} onLogout={handleLogout} />;
+      default: return <StudentDashboard user={user} onLogout={handleLogout} />;
+    }
+  };
 
   return (
     <I18nProvider>
@@ -119,7 +151,7 @@ const Index = () => {
         {screen === "login" && <LoginPage onBack={handleBack} onLoginSuccess={handleLoginSuccess} />}
         {screen === "apply" && <ApplyPage onBack={handleBack} />}
         {screen === "postOnboarding" && user && <PostRegOnboarding user={user} onComplete={handlePostOnboardingComplete} />}
-        {screen === "dashboard" && user && <StudentDashboard user={user} onLogout={handleLogout} />}
+        {screen === "dashboard" && renderDashboard()}
       </div>
     </I18nProvider>
   );
